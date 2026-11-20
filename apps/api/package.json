@@ -11,16 +11,21 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@fastify/cookie": "^11.1.5",
     "@fastify/cors": "^11.4.3",
     "@netskope/database": "workspace:*",
     "@netskope/shared": "workspace:*",
+    "@node-rs/argon2": "^2.2.2",
+    "bullmq": "^6.7.8",
     "fastify": "^5.12.8",
-    "ioredis": "^5.8.2"
+    "ioredis": "^5.8.2",
+    "jose": "^6.2.18"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.19.2",
     "eslint": "^10.15.0",
+    "@netskope/worker": "workspace:*",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4",

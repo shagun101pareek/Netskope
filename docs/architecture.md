@@ -26,13 +26,13 @@ PostgreSQL             Redis
 | Piece | Responsibility today |
 | --- | --- |
 | `apps/web` | Next.js on port 3010. Reads `GET /api/v1/health` and shows whether API, Postgres, Redis, and the worker are reachable. |
-| `apps/api` | Fastify on port 3011. Checks Postgres with `SELECT 1`, Redis with `PING`, and the worker by reading a Redis key. |
-| `apps/worker` | Connects to Postgres and Redis. Publishes `netskope:worker:heartbeat` every 5 seconds with a 15 second TTL. Does not launch a browser. |
+| `apps/api` | Fastify on port 3011. Registers and signs in users, checks a scan URL, writes a `PENDING` scan, and enqueues a BullMQ job. Refuses the scan when the worker heartbeat is missing. |
+| `apps/worker` | Publishes `netskope:worker:heartbeat` and consumes the `scans` queue. Accepting a job sets the scan to `RUNNING`. It does not launch a browser. |
 | `packages/database` | Prisma 7 schema and a shared client. Driver adapter is `@prisma/adapter-pg`. |
 | `packages/shared` | Health types, payload guards, and the heartbeat contract. |
 | Docker Compose | Postgres 17 and Redis 7 only. Host ports are 5434 and 6380 so a machine that already has those services on 5432 and 6379 is left alone. |
 
-The API is considered healthy when Postgres and Redis are up. The worker is reported separately. A load balancer should not restart the API because the worker stopped; they are different failure domains. Scan creation, once it exists, will refuse to enqueue work when the worker heartbeat is missing.
+The API is considered healthy when Postgres and Redis are up. The worker is reported separately. A load balancer should not restart the API because the worker stopped; they are different failure domains. `POST /scans` refuses to enqueue work when the worker heartbeat is missing.
 
 ## Why the worker has no HTTP port
 
@@ -52,6 +52,12 @@ Timing columns are nullable. Unavailable browser timings stay `NULL`. Response b
 
 One `.env` file lives at the repository root. Package scripts run with the package directory as the working directory, so the API and worker import `@netskope/shared/load-env`, which walks up to that file. Next.js loads the same file from `apps/web/next.config.ts`.
 
+## Authentication and the scan queue
+
+Passwords are hashed with Argon2id. The access token is a 15 minute JWT sent as `Authorization: Bearer`. The refresh token is a random 32 byte value stored only as a SHA-256 hash, and the raw value is an httpOnly cookie scoped to `/api/v1/auth`. Refresh rotates the token. Presenting a rotated token revokes that user's active refresh tokens.
+
+Scan creation resolves the hostname and rejects non-public addresses before a row is written. One user can have one `PENDING` or `RUNNING` scan for the same normalized URL. The queue job id is the scan id. The worker marks the scan `RUNNING` and leaves it there; browser capture is the next step, and jobs accepted before that step will not be replayed.
+
 ## Explicitly not built yet
 
-Authentication, scan endpoints, BullMQ jobs, Playwright, CDP capture, SSE, analytics, and exports. Those start on Day 2. No URL is fetched by this revision, so the SSRF controls are not implemented and must land before any scan endpoint accepts a URL.
+Playwright, CDP capture, SSE, the inspector UI, analytics, and exports. The API does not fetch the submitted page. Redirect targets are not followed yet, so they must be checked again when the browser is added.

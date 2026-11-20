@@ -3,15 +3,20 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./acknowledge-scan": "./src/processors/acknowledge-scan.ts"
+  },
   "scripts": {
     "dev": "tsx watch --clear-screen=false --exclude ../../node_modules src/worker.ts",
     "start": "tsx src/worker.ts",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "lint": "eslint ."
   },
   "dependencies": {
     "@netskope/database": "workspace:*",
     "@netskope/shared": "workspace:*",
+    "bullmq": "^6.7.8",
     "ioredis": "^5.8.2",
     "pino": "^10.1.0"
   },
@@ -21,6 +26,7 @@
     "eslint": "^10.15.0",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.46.4"
+    "typescript-eslint": "^8.46.4",
+    "vitest": "^5.1.1"
   }
 }

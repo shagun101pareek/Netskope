@@ -9,3 +9,6 @@ export const WORKER_HEARTBEAT_KEY = "netskope:worker:heartbeat";
 export const WORKER_HEARTBEAT_TTL_SECONDS = 15;
 
 export const WORKER_HEARTBEAT_INTERVAL_MS = 5_000;
+
+/** BullMQ queue that carries a scan from the API to the browser worker. */
+export const SCAN_QUEUE_NAME = "scans";

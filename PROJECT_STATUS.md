@@ -2,7 +2,7 @@
 
 ## Current day
 
-Day 1 — Project foundation. Implemented and verified on 19 Nov 2026.
+Day 2 — Authentication and job queue. Implemented and verified on 20 Nov 2026, on branch `feature/authScanQueue`.
 
 ## Completed tasks
 
@@ -15,15 +15,23 @@ Day 1 — Project foundation. Implemented and verified on 19 Nov 2026.
 - `pnpm typecheck`, `pnpm test` (6 tests), and `pnpm lint` passed.
 - Live check: health returned `postgres: up`, `redis: up`, `worker: up`. Deleting the heartbeat made `worker` `down` without failing the API, and the next beat restored it. `http://localhost:3010` returned 200 and showed all four services up.
 
+Day 2:
+
+- Registration, login, refresh, and logout. Passwords use Argon2id. Refresh tokens are hashed and rotated.
+- `POST /scans` checks the URL, requires a live worker, writes a `PENDING` scan, and enqueues BullMQ job `scans`.
+- The worker accepts the job and sets the scan to `RUNNING`. It does not open a browser.
+- `pnpm typecheck`, `pnpm lint`, and `pnpm test` passed: 18 API tests and 2 worker tests.
+- Live check: a registered user created `https://1.1.1.1/cdn-cgi/trace`, and the running worker moved it to `RUNNING` with `startedAt` set.
+
 ## Pending tasks
 
-- Day 2: registration, login, password hashing, scan creation, BullMQ, and a worker that acknowledges a job. No browser until that queue path works.
-- SSRF protection before any endpoint accepts a URL.
+- Day 3: Playwright opens an isolated browser for a `RUNNING` scan and records network events. Do not mark those scans `COMPLETED` until capture actually finishes.
+- Redirect targets are not rechecked yet. That check belongs in the worker when navigation exists.
 - Application Docker images (Day 14).
 
 ## Known bugs
 
-- None.
+- A scan accepted by the worker stays `RUNNING`. The queue job is finished, so it will not be picked up again when browser capture is added. New scans created after that change will go through capture.
 
 ## Architectural decisions
 
@@ -35,8 +43,10 @@ Day 1 — Project foundation. Implemented and verified on 19 Nov 2026.
 - `scans.error_message` records why a scan failed.
 - Host ports are 3010 (web), 3011 (API), 5434 (Postgres), and 6380 (Redis) because 3000, 3001, 5432, and 6379 were already taken on this machine. Container-internal Postgres and Redis ports are unchanged.
 - Shared package imports are extensionless so Next.js Turbopack can compile the TypeScript source.
-- pnpm is allowed to run build scripts for `prisma`, `@prisma/engines`, and `esbuild`. Without that, `pnpm install` cannot download the Prisma engines.
+- pnpm is allowed to run build scripts for `prisma`, `@prisma/engines`, `esbuild`, and `msgpackr-extract`. BullMQ uses the last of those for queue serialization.
+- Access tokens are JWTs. Refresh tokens are random, stored as SHA-256 hashes, and delivered only in an httpOnly cookie. Rotation reuse revokes that user's active refresh tokens.
+- Scan admission rejects non-public http(s) destinations before a row is written. A partial unique index allows one `PENDING` or `RUNNING` scan per user and URL. Prisma cannot model that predicate, so the index lives in the SQL migration and must not be dropped by a later generated migration.
 
 ## Next implementation steps
 
-Day 2 only: users can register and log in, create a scan row, and enqueue a BullMQ job that the worker marks as received. Do not add Playwright in that step.
+Day 3 only: the worker launches Chromium for a scan it has marked `RUNNING`, captures the first network events, and still does not pretend the scan is complete until the capture path is real.
