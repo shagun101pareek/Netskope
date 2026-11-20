@@ -2,6 +2,7 @@ import "./load-env.js";
 import { prisma } from "@netskope/database";
 import { Redis } from "ioredis";
 import pino from "pino";
+import { startScanWorker } from "./queues/scan-worker.js";
 import { startHeartbeat } from "./services/heartbeat.js";
 
 function required(name: string): string {
@@ -19,7 +20,8 @@ const logger = pino({
   level: process.env.LOG_LEVEL ?? "info",
 });
 
-const redis = new Redis(required("REDIS_URL"), {
+const redisUrl = required("REDIS_URL");
+const redis = new Redis(redisUrl, {
   maxRetriesPerRequest: 1,
   connectTimeout: 5_000,
   enableOfflineQueue: false,
@@ -33,12 +35,14 @@ redis.on("error", (error: unknown) => {
 });
 
 const stopHeartbeat = startHeartbeat(redis, logger);
+const scanWorker = startScanWorker(redisUrl, logger);
 
 logger.info("browser worker started");
-logger.info("browser sessions are not launched from this process until instrumentation is added");
+logger.info("scan jobs are accepted, and browser capture is not implemented yet");
 
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, "shutting down worker");
+  await scanWorker.close();
   await stopHeartbeat();
   redis.disconnect();
   await prisma.$disconnect();

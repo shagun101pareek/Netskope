@@ -32,4 +32,13 @@ export const env = {
   webOrigin: process.env.WEB_ORIGIN ?? "http://localhost:3010",
   databaseUrl: required("DATABASE_URL"),
   redisUrl: required("REDIS_URL"),
+  accessTokenSecret: requiredSecret("ACCESS_TOKEN_SECRET"),
 };
+
+function requiredSecret(name: string): string {
+  const value = required(name);
+  if (value.length < 32) {
+    throw new Error(`${name} must be at least 32 characters`);
+  }
+  return value;
+}
