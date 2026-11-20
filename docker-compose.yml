@@ -1,0 +1,49 @@
+# Local infrastructure only. The Next.js app, Fastify API, and browser worker
+# run on the host during development so they can be restarted independently.
+# Application images are intentionally not defined until deployment (Day 14).
+
+name: netskope
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: netskope-postgres
+    restart: unless-stopped
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: netskope
+      POSTGRES_PASSWORD: netskope
+      POSTGRES_DB: netskope
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netskope -d netskope"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: netskope-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    mem_limit: 256m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,118 @@
+// Netskope persistence model.
+//
+// Timing columns are nullable on purpose. A missing browser timing is NULL,
+// never zero. Zero would look like a measurement.
+//
+// Response bodies are not stored in these rows. NetworkResponse keeps
+// body size and an optional reference. The worker will enforce size and
+// retention limits when capture is implemented.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ScanStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  scans Scan[]
+
+  @@map("users")
+}
+
+model Scan {
+  id           String     @id @default(uuid()) @db.Uuid
+  userId       String     @map("user_id") @db.Uuid
+  url          String     @db.Text
+  status       ScanStatus @default(PENDING)
+  startedAt    DateTime?  @map("started_at") @db.Timestamptz(6)
+  completedAt  DateTime?  @map("completed_at") @db.Timestamptz(6)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// Set only when status is FAILED. Successful scans leave this null.
+  errorMessage String?    @map("error_message") @db.Text
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requests NetworkRequest[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status])
+  @@map("scans")
+}
+
+model NetworkRequest {
+  id             String   @id @default(uuid()) @db.Uuid
+  scanId         String   @map("scan_id") @db.Uuid
+  /// Chrome DevTools Protocol request id. Unique inside one scan.
+  /// Redirect hops that reuse this id are stored on redirectChain, not as new rows.
+  requestId      String   @map("request_id")
+  url            String   @db.Text
+  method         String
+  resourceType   String?  @map("resource_type")
+  /// Headers must be redacted before they are written.
+  requestHeaders Json?    @map("request_headers")
+  requestPayload String?  @map("request_payload") @db.Text
+  initiator      Json?
+  timestamp      DateTime @db.Timestamptz(6)
+  failureReason  String?  @map("failure_reason") @db.Text
+  /// Intermediate redirect hops that share this CDP request id, oldest first.
+  redirectChain  Json?    @map("redirect_chain")
+
+  scan     Scan              @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  response NetworkResponse?
+  timing   RequestTiming?
+
+  @@unique([scanId, requestId])
+  @@index([scanId, timestamp])
+  @@index([scanId, method])
+  @@index([scanId, resourceType])
+  @@map("network_requests")
+}
+
+model NetworkResponse {
+  id                       String  @id @default(uuid()) @db.Uuid
+  networkRequestId         String  @unique @map("network_request_id") @db.Uuid
+  statusCode               Int?    @map("status_code")
+  /// Headers must be redacted before they are written.
+  responseHeaders          Json?   @map("response_headers")
+  mimeType                 String? @map("mime_type")
+  /// Encoded body size in bytes, when the browser reported one.
+  bodySize                 Int?    @map("body_size")
+  /// Pointer to an external body, not the body itself.
+  responsePayloadReference String? @map("response_payload_reference")
+
+  request NetworkRequest @relation(fields: [networkRequestId], references: [id], onDelete: Cascade)
+
+  @@index([statusCode])
+  @@map("network_responses")
+}
+
+model RequestTiming {
+  id               String @id @default(uuid()) @db.Uuid
+  networkRequestId String @unique @map("network_request_id") @db.Uuid
+  /// Durations are milliseconds. NULL means the browser did not expose that phase.
+  dnsTime          Float? @map("dns_time")
+  connectTime      Float? @map("connect_time")
+  tlsTime          Float? @map("tls_time")
+  ttfb             Float?
+  downloadTime     Float? @map("download_time")
+  totalDuration    Float? @map("total_duration")
+  timingMetadata   Json?  @map("timing_metadata")
+
+  request NetworkRequest @relation(fields: [networkRequestId], references: [id], onDelete: Cascade)
+
+  @@map("request_timings")
+}

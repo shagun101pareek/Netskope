@@ -1,0 +1,26 @@
+{
+  "name": "@netskope/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false --exclude ../../node_modules src/worker.ts",
+    "start": "tsx src/worker.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@netskope/database": "workspace:*",
+    "@netskope/shared": "workspace:*",
+    "ioredis": "^5.8.2",
+    "pino": "^10.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.15.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4"
+  }
+}

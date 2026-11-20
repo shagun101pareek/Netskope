@@ -1,0 +1,17 @@
+node_modules
+.pnpm-store
+.turbo
+.next
+dist
+coverage
+.vercel
+.DS_Store
+*.log
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+packages/database/src/generated
+playwright-report
+test-results
+blob-report

@@ -1,0 +1,29 @@
+{
+  "name": "@netskope/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false --exclude ../../node_modules src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.4.3",
+    "@netskope/database": "workspace:*",
+    "@netskope/shared": "workspace:*",
+    "fastify": "^5.12.8",
+    "ioredis": "^5.8.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.15.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vitest": "^5.1.1"
+  }
+}
