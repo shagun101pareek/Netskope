@@ -1,10 +1,11 @@
+import Link from "next/link";
 import { ServiceStatus } from "@/components/service-status";
 import { getHealth } from "@/lib/api";
 
 const processes = [
   { name: "Web", detail: "Next.js on port 3010. Presentation only." },
   { name: "API", detail: "Fastify on port 3011. Validation, persistence, and job orchestration." },
-  { name: "Worker", detail: "Separate process. Browser sessions will run here, never inside an API request." },
+  { name: "Worker", detail: "Separate process. Chromium runs here, one isolated context per scan." },
 ];
 
 export default async function HomePage() {
@@ -19,9 +20,13 @@ export default async function HomePage() {
           Website API discovery and performance intelligence
         </h1>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--muted)]">
-          Inspect how a website you own communicates with its backend. The scanner is not
-          enabled yet. This screen confirms that the application processes and their data
-          services can see each other.
+          Inspect how a website you own communicates with its backend. Scans run in the
+          worker. This screen reports whether the processes and data services can see
+          each other.
+        </p>
+        <p className="mt-4 flex gap-4 text-sm">
+          <Link className="underline" href="/login">Sign in</Link>
+          <Link className="underline" href="/register">Create an account</Link>
         </p>
       </header>
 

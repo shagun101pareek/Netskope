@@ -38,7 +38,7 @@ Requires authentication. Body: `{ "url": "https://example.com" }`.
 
 The URL must be absolute http or https, must not contain credentials, and must not resolve to a loopback, private, link-local, or metadata address. `201` returns `{ "scan": { ... } }` with status `PENDING`.
 
-`409` when this user already has a `PENDING` or `RUNNING` scan of the same normalized URL. `503` with code `WORKER_UNAVAILABLE` when the worker heartbeat is missing. The scan row is not created in that case.
+`409` when this user already has a `PENDING` or `RUNNING` scan of the same normalized URL. `503` with code `WORKER_UNAVAILABLE` when the worker heartbeat is missing. The scan row is not created in that case. `429` after 30 scans from the same user in 10 minutes. `503` with code `RATE_LIMIT_UNAVAILABLE` when Redis cannot count.
 
 ## GET /api/v1/scans
 
@@ -48,11 +48,33 @@ Requires authentication. Returns `{ "scans": [], "nextCursor": null }` for the s
 
 Requires authentication. `200` returns `{ "scan": { ... } }` when the scan belongs to the user. `404` otherwise.
 
-A scan the worker has accepted has status `RUNNING` and a `startedAt` timestamp. Browser capture is not running yet, so the scan does not move to `COMPLETED` on its own.
+A new scan moves from `PENDING` to `RUNNING` when the worker accepts it. After Chromium loads the page, the status becomes `COMPLETED` and `completedAt` is set. A blocked destination or a browser failure ends as `FAILED` with `errorMessage`. Captured requests, responses, redirect hops, failures, timing phases, and a request class are stored under the browser's protocol request id. A timing phase the browser did not report is null. Response bodies are not returned.
 
-## Not implemented
+## GET /api/v1/scans/:id/requests
 
-`/requests` and `/analytics` are not registered. Scan progress over SSE is not registered.
+Requires authentication. Query: `q` matches the URL, `method`, `status` (`2xx`, `3xx`, `4xx`, `5xx`, `failed`, or an exact code), `requestClass` (`DOCUMENT`, `STATIC`, `API`, `OTHER`), `sort` (`timestamp`, `duration`, `status`, `url`), and `limit` from 1 to 500, default 200.
+
+Returns `{ "requests": [] }`. Each item has method, URL, class, status, failure reason, mime type, body size, and total duration. Headers and payloads are on the detail route.
+
+## GET /api/v1/scans/:id/requests/:requestRowId
+
+Requires authentication. Returns `{ "request": { ... } }` with redacted headers, the stored request payload, response metadata, timing, initiator, and redirect chain. `404` when the row is not on that scan.
+
+## GET /api/v1/scans/:id/analytics
+
+Requires authentication. Returns request count, failed count (status 400 or higher, or a failure reason), average latency in milliseconds, duplicate groups, the top duplicates, the five slowest requests, and a latency distribution. The average ignores rows whose total duration is null. It is null when no duration was measured.
+
+## GET /api/v1/scans/compare?left=<id>&right=<id>
+
+Requires authentication. Both scans must belong to the user and must differ. Keys are `METHOD url`. The body lists URLs only on the left, only on the right, and the largest positive and negative duration deltas.
+
+## GET /api/v1/scans/:id/export?format=json|csv
+
+Requires authentication. `json` is the default. CSV columns are method, url, request class, status, failure reason, and total duration. The response is an attachment.
+
+## GET /api/v1/scans/:id/events
+
+Requires authentication. `Content-Type: text/event-stream`. Each event is `data: {"type":"status","status":"RUNNING","errorMessage":null}`. A scan that is already `COMPLETED` or `FAILED` sends one event and closes. An in-progress scan stays open, listens on Redis channel `netskope:scan:<id>`, and also reads the row every 2 seconds. The browser client uses `fetch` with the bearer token. Request rows are not part of this stream.
 
 ## GET /api/v1/health
 
@@ -85,6 +107,4 @@ Reports process dependencies. No authentication. This route does not accept a UR
 | `redis` | `PING`. |
 | `worker` | Redis key `netskope:worker:heartbeat` contains a JSON object with `service: "worker"` and `status: "ok"`. |
 
-## Not implemented
-
-`/auth/*`, `/scans`, `/requests`, and `/analytics` are specified for later days and are not registered.
+Response bodies are not part of any route.

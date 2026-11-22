@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { AppError } from "../../lib/errors.js";
 import { checkWorker } from "../../lib/dependencies.js";
+import { enforceRateLimit } from "../../lib/rate-limit.js";
 import { requireAuth } from "../../plugins/authenticate.js";
 import { createScan, getScan, listScans } from "./scans.service.js";
 
@@ -55,6 +56,14 @@ export async function scanRoutes(app: FastifyInstance): Promise<void> {
       if (!user) {
         throw new AppError(401, "UNAUTHORIZED", "Sign in again.");
       }
+
+      await enforceRateLimit(
+        app.redis,
+        `rate:scan:${user.id}`,
+        30,
+        10 * 60,
+        "Scan creation is temporarily unavailable.",
+      );
 
       const body = request.body as { url: string };
       const scan = await createScan(user.id, body.url, app.scanQueue);

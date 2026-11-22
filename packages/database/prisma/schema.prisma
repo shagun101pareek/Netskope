@@ -23,6 +23,13 @@ enum ScanStatus {
   FAILED
 }
 
+enum RequestClass {
+  DOCUMENT
+  STATIC
+  API
+  OTHER
+}
+
 model User {
   id           String   @id @default(uuid()) @db.Uuid
   email        String   @unique
@@ -83,6 +90,8 @@ model NetworkRequest {
   url            String   @db.Text
   method         String
   resourceType   String?  @map("resource_type")
+  /// Document, static asset, API call, or other. Null on rows captured before classification.
+  requestClass   RequestClass? @map("request_class")
   /// Headers must be redacted before they are written.
   requestHeaders Json?    @map("request_headers")
   requestPayload String?  @map("request_payload") @db.Text
@@ -100,6 +109,7 @@ model NetworkRequest {
   @@index([scanId, timestamp])
   @@index([scanId, method])
   @@index([scanId, resourceType])
+  @@index([scanId, requestClass])
   @@map("network_requests")
 }
 

@@ -7,12 +7,12 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "db:generate": "prisma generate",
+    "db:generate": "prisma generate && node ./rewrite-prisma-runtime.mjs",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "typecheck": "tsc --noEmit",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate && node ./rewrite-prisma-runtime.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.1",

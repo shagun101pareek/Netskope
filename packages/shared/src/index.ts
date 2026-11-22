@@ -7,5 +7,7 @@ export {
   WORKER_HEARTBEAT_TTL_SECONDS,
 } from "./constants";
 export type { ScanJobData } from "./scans";
+export { scanEventChannel } from "./scan-events";
+export type { ScanStatusEvent } from "./scan-events";
 export { isHealthReport, isWorkerHeartbeat } from "./health";
 export type { DependencyStatus, HealthReport, WorkerHeartbeat } from "./health";

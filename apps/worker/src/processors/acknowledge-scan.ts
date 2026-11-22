@@ -2,8 +2,8 @@ import { ScanStatus, prisma } from "@netskope/database";
 
 /**
  * Marks a queued scan as accepted by this worker.
- * Browser capture is intentionally not started here. The scan stays RUNNING
- * until that step exists, and this function can be called again safely.
+ * Capture runs after this returns. A second delivery of a scan that is
+ * already RUNNING, COMPLETED, or FAILED does not change it again.
  */
 export async function acknowledgeScan(scanId: string): Promise<void> {
   const accepted = await prisma.scan.updateMany({
