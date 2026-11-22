@@ -11,6 +11,7 @@
     "start": "tsx src/worker.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "browser:install": "playwright install chromium",
     "lint": "eslint ."
   },
   "dependencies": {
@@ -18,7 +19,8 @@
     "@netskope/shared": "workspace:*",
     "bullmq": "^6.7.8",
     "ioredis": "^5.8.2",
-    "pino": "^10.1.0"
+    "pino": "^10.1.0",
+    "playwright": "^1.65.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

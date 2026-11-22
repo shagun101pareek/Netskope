@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./load-env": "./src/load-env.ts"
+    "./load-env": "./src/load-env.ts",
+    "./url-policy": "./src/url-policy.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

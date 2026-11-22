@@ -1,6 +1,6 @@
 # Local infrastructure only. The Next.js app, Fastify API, and browser worker
 # run on the host during development so they can be restarted independently.
-# Application images are intentionally not defined until deployment (Day 14).
+# Application images live in docker-compose.prod.yml.
 
 name: netskope
 

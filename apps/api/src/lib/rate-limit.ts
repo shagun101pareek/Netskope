@@ -10,6 +10,7 @@ export async function enforceRateLimit(
   key: string,
   limit: number,
   windowSeconds: number,
+  unavailableMessage = "Authentication is temporarily unavailable.",
 ): Promise<void> {
   let count: number;
 
@@ -19,7 +20,7 @@ export async function enforceRateLimit(
       await redis.expire(key, windowSeconds);
     }
   } catch {
-    throw new AppError(503, "RATE_LIMIT_UNAVAILABLE", "Authentication is temporarily unavailable.");
+    throw new AppError(503, "RATE_LIMIT_UNAVAILABLE", unavailableMessage);
   }
 
   if (count > limit) {

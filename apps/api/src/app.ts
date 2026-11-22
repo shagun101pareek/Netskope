@@ -7,6 +7,7 @@ import { AppError } from "./lib/errors.js";
 import { env } from "./lib/env.js";
 import { authRoutes } from "./modules/auth/auth.route.js";
 import { healthRoutes } from "./modules/health/health.route.js";
+import { scanInsightRoutes } from "./modules/scans/scan-insights.route.js";
 import { scanRoutes } from "./modules/scans/scans.route.js";
 import { createScanQueue } from "./queues/scan-queue.js";
 
@@ -74,6 +75,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await app.register(healthRoutes, { prefix: "/api/v1" });
   await app.register(authRoutes, { prefix: "/api/v1/auth" });
+  await app.register(scanInsightRoutes, { prefix: "/api/v1/scans" });
   await app.register(scanRoutes, { prefix: "/api/v1/scans" });
 
   return app;

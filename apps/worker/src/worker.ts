@@ -2,6 +2,7 @@ import "./load-env.js";
 import { prisma } from "@netskope/database";
 import { Redis } from "ioredis";
 import pino from "pino";
+import { closeBrowser } from "./browser/session.js";
 import { startScanWorker } from "./queues/scan-worker.js";
 import { startHeartbeat } from "./services/heartbeat.js";
 
@@ -35,14 +36,14 @@ redis.on("error", (error: unknown) => {
 });
 
 const stopHeartbeat = startHeartbeat(redis, logger);
-const scanWorker = startScanWorker(redisUrl, logger);
+const scanWorker = startScanWorker(redisUrl, logger, redis);
 
 logger.info("browser worker started");
-logger.info("scan jobs are accepted, and browser capture is not implemented yet");
 
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, "shutting down worker");
   await scanWorker.close();
+  await closeBrowser();
   await stopHeartbeat();
   redis.disconnect();
   await prisma.$disconnect();

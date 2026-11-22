@@ -1,6 +1,6 @@
 # System design
 
-This note records the design that Day 1 put in place, and the constraints later days have to preserve.
+This note records the design the implementation has to preserve.
 
 ## Goal
 
@@ -15,7 +15,7 @@ Isolation requirements already reflected in the schema and process layout:
 - One scan belongs to one user.
 - One worker job will own one browser context. Contexts must not be reused across scans.
 - Concurrent scans are concurrent jobs, not concurrent work inside one browser context.
-- Request correlation is per scan, using the CDP request id.
+- Request correlation is per scan, using the Chrome DevTools Protocol request id. Concurrent events are matched by that id. Redirect hops that reuse it are stored on `redirect_chain`.
 
 ## Health versus readiness for scans
 
@@ -23,16 +23,24 @@ Isolation requirements already reflected in the schema and process layout:
 
 ## Persistence choices
 
-PostgreSQL stores users, scans, request metadata, response metadata, and timings. Redis stores coordination state: today a heartbeat, next a BullMQ queue. Redis is not the system of record for scan results.
+PostgreSQL stores users, scans, request metadata, response metadata, timings, and request class. Redis stores the heartbeat, the BullMQ queue, rate-limit counters, and short-lived scan status messages. Redis is not the system of record for scan results.
 
 Large response bodies stay out of ordinary rows. The response table stores `body_size` and `response_payload_reference`. The object store or file layout is chosen when capture is implemented, together with a hard byte limit and a retention policy.
 
 ## Security boundary
 
-`POST /scans` rejects non-HTTP(S) schemes, credentialed URLs, localhost, private, link-local, and cloud-metadata destinations, including names whose DNS answers include any blocked address. It does not fetch the URL. When the worker follows redirects, it has to resolve and check the destination again before connecting, or a public name can be rebound to an internal address after admission.
+`POST /scans` rejects non-HTTP(S) schemes, credentialed URLs, localhost, private, link-local, and cloud-metadata destinations, including names whose DNS answers include any blocked address. It does not fetch the URL. The worker repeats that check for the navigation URL and for each request the page makes. A blocked request is aborted before connect. Redirects to a new host are checked again. Decisions for one host are reused only inside that scan.
 
-Sensitive headers are not collected yet. The schema comments mark `request_headers` and `response_headers` as redacted-before-write. Redaction has to happen in the worker before `INSERT`, not only in the UI.
+The check and Chromium's own connect are still separate lookups, so a name can change address in that gap. Connections are not pinned to the resolved IP yet.
+
+`authorization`, `cookie`, `set-cookie`, and token-like headers are replaced with `[redacted]` before insert. `body_size` is the encoded byte count from `Network.loadingFinished` when Chrome reports one, and stays null otherwise. Response bodies are not downloaded.
+
+Timing rows are milliseconds from the protocol's `ResourceTiming` block. DNS, connect, TLS, TTFB, and download are separate phases. Connect stops where TLS starts. TTFB is the wait after the request is sent until response headers arrive. Download runs from those headers until `loadingFinished`. Total is `loadingFinished` minus `requestTime`. A mark of `-1`, or a missing mark, leaves that phase `NULL`.
+
+Each stored request is classified once, at insert time. Document wins over a JSON content type. Analytics read at most 500 rows for a scan and compute the average only from durations that were actually measured.
+
+Scan status is published on `netskope:scan:<id>` and also polled from PostgreSQL while a client holds the event stream. The stream does not carry request rows, because capture writes them in one transaction at the end.
 
 ## What this design does not do
 
-It does not crawl past the first page, generate API documentation, or build a dependency graph. Those are outside the 14-day scope.
+It does not crawl past the first page, generate API documentation, or build a dependency graph. Those are outside the 14-day scope. No demo video is part of the repository.

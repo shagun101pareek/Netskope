@@ -1,0 +1,14 @@
+node_modules
+.git
+.pnpm-store
+.env
+.env.*
+!.env.example
+**/.next
+**/dist
+**/.turbo
+**/coverage
+packages/database/src/generated
+docs/screenshots
+*.md
+!README.md
