@@ -12,6 +12,7 @@ export async function createScan(
   userId: string,
   rawUrl: string,
   queue: Queue<ScanJobData>,
+  captureBodies = false,
 ): Promise<ScanResponse> {
   let url: string;
   try {
@@ -35,7 +36,7 @@ export async function createScan(
   let scan: ScanResponse;
   try {
     const created = await prisma.scan.create({
-      data: { userId, url, status: ScanStatus.PENDING },
+      data: { userId, url, status: ScanStatus.PENDING, captureBodies },
     });
     scan = presentScan(created);
   } catch (error) {

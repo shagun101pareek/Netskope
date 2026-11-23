@@ -3,6 +3,7 @@ import { prisma } from "@netskope/database";
 import { Redis } from "ioredis";
 import pino from "pino";
 import { closeBrowser } from "./browser/session.js";
+import { startReplayWorker } from "./queues/replay-worker.js";
 import { startScanWorker } from "./queues/scan-worker.js";
 import { startHeartbeat } from "./services/heartbeat.js";
 
@@ -37,12 +38,14 @@ redis.on("error", (error: unknown) => {
 
 const stopHeartbeat = startHeartbeat(redis, logger);
 const scanWorker = startScanWorker(redisUrl, logger, redis);
+const replayWorker = startReplayWorker(redisUrl, logger);
 
 logger.info("browser worker started");
 
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, "shutting down worker");
   await scanWorker.close();
+  await replayWorker.close();
   await closeBrowser();
   await stopHeartbeat();
   redis.disconnect();

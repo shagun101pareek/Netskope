@@ -1,8 +1,7 @@
-import { redactHeaders } from "./redact.js";
+import { isSensitiveKey, MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES, redactHeaders, redactPayload } from "@netskope/shared/inspection";
 import { calculatePhaseTiming, type PhaseTiming } from "./timing.js";
 
 const DEFAULT_MAX_REQUESTS = 500;
-const MAX_PAYLOAD_BYTES = 8_192;
 const MAX_URL_LENGTH = 8_000;
 const UNFINISHED_REASON = "The request did not finish before the scan ended.";
 
@@ -11,11 +10,37 @@ export interface RedirectHop {
   statusCode: number | null;
 }
 
+export interface QueryParam {
+  name: string;
+  value: string;
+}
+
+export interface StackFrame {
+  functionName: string;
+  url: string;
+  lineNumber: number;
+  columnNumber: number;
+}
+
+export interface InitiatorInfo {
+  type: string;
+  url?: string;
+  lineNumber?: number;
+  columnNumber?: number;
+  requestId?: string;
+  stack?: StackFrame[];
+}
+
 export interface CapturedResponse {
   statusCode: number;
+  statusText: string | null;
+  remoteAddress: string | null;
   responseHeaders: Record<string, string>;
   mimeType: string | null;
   bodySize: number | null;
+  responseBody: string | null;
+  bodyOmittedReason: string | null;
+  bodyTruncated: boolean;
 }
 
 export interface CapturedExchange {
@@ -25,16 +50,28 @@ export interface CapturedExchange {
   resourceType: string | null;
   requestHeaders: Record<string, string>;
   requestPayload: string | null;
+  requestPayloadTruncated: boolean;
+  requestBodyOmittedReason: string | null;
+  requestSize: number | null;
+  queryParams?: QueryParam[];
   timestamp: Date;
-  initiator?: { type: string; url?: string };
+  initiator?: InitiatorInfo;
   failureReason: string | null;
   redirectChain?: RedirectHop[];
   response?: CapturedResponse;
   timing?: PhaseTiming;
 }
 
+export interface BodyTarget {
+  requestId: string;
+  url: string;
+  mimeType: string | null;
+}
+
 interface ResponseDraft {
   statusCode: number;
+  statusText: string | null;
+  remoteAddress: string | null;
   responseHeaders: Record<string, string>;
   mimeType: string | null;
 }
@@ -46,8 +83,14 @@ interface Exchange {
   resourceType: string | null;
   requestHeaders: Record<string, string>;
   requestPayload: string | null;
+  requestPayloadTruncated: boolean;
+  requestBodyOmittedReason: string | null;
+  requestSize: number | null;
   timestamp: Date;
-  initiator: { type: string; url?: string } | null;
+  initiator: InitiatorInfo | null;
+  responseBody: string | null;
+  bodyOmittedReason: string | null;
+  bodyTruncated: boolean;
   redirectChain: RedirectHop[];
   failureReason: string | null;
   response: ResponseDraft | null;
@@ -73,6 +116,10 @@ export function createNetworkCollector(options?: { maxRequests?: number; now?: (
   loadingFailed: (params: unknown) => void;
   records: () => CapturedExchange[];
   truncated: () => boolean;
+  bodyTargets: () => BodyTarget[];
+  missingPayloads: () => { requestId: string }[];
+  setResponseBody: (requestId: string, body: { text: string | null; truncated: boolean; omittedReason: string | null }) => void;
+  setRequestPayload: (requestId: string, postData: string) => void;
 } {
   const maxRequests = options?.maxRequests ?? DEFAULT_MAX_REQUESTS;
   const now = options?.now ?? ((): Date => new Date());
@@ -108,9 +155,16 @@ export function createNetworkCollector(options?: { maxRequests?: number; now?: (
           readHeaders(request.headers),
           takePending(pendingRequestHeaders, requestId),
         );
-        existing.requestPayload = payloadOf(request.postData);
+        const payload = payloadOf(request.postData, existing.requestHeaders);
+        existing.requestPayload = payload.text;
+        existing.requestPayloadTruncated = payload.truncated;
+        existing.requestBodyOmittedReason = payload.omittedReason;
+        existing.requestSize = requestSizeOf(existing.requestHeaders, payload.text);
         existing.response = null;
         existing.provisional = null;
+        existing.responseBody = null;
+        existing.bodyOmittedReason = null;
+        existing.bodyTruncated = false;
         existing.encodedLength = null;
         existing.timing = null;
         existing.finishedAt = null;
@@ -130,15 +184,23 @@ export function createNetworkCollector(options?: { maxRequests?: number; now?: (
         return;
       }
 
+      const requestHeaders = mergeHeaders(readHeaders(request.headers), takePending(pendingRequestHeaders, requestId));
+      const payload = payloadOf(request.postData, requestHeaders);
       exchanges.set(requestId, {
         requestId,
         url: clip(url),
         method: methodOf(request.method),
         resourceType: asString(event.type),
-        requestHeaders: mergeHeaders(readHeaders(request.headers), takePending(pendingRequestHeaders, requestId)),
-        requestPayload: payloadOf(request.postData),
+        requestHeaders,
+        requestPayload: payload.text,
+        requestPayloadTruncated: payload.truncated,
+        requestBodyOmittedReason: payload.omittedReason,
+        requestSize: requestSizeOf(requestHeaders, payload.text),
         timestamp: wallTimeToDate(event.wallTime, now()),
         initiator: initiatorOf(event.initiator),
+        responseBody: null,
+        bodyOmittedReason: null,
+        bodyTruncated: false,
         redirectChain:
           redirectResponse && asString(redirectResponse.url)
             ? [
@@ -186,6 +248,8 @@ export function createNetworkCollector(options?: { maxRequests?: number; now?: (
 
       const draft: ResponseDraft = {
         statusCode,
+        statusText: clipText(asString(response.statusText), 64),
+        remoteAddress: remoteAddressOf(response),
         responseHeaders: mergeHeaders(readHeaders(response.headers), takePending(pendingResponseHeaders, requestId)),
         mimeType: mediaType(asString(response.mimeType)),
       };
@@ -275,6 +339,52 @@ export function createNetworkCollector(options?: { maxRequests?: number; now?: (
     truncated() {
       return dropped > 0;
     },
+
+    bodyTargets() {
+      return [...exchanges.values()]
+        .filter((exchange) => exchange.response || exchange.provisional)
+        .map((exchange) => ({
+          requestId: exchange.requestId,
+          url: exchange.url,
+          mimeType: (exchange.response ?? exchange.provisional)?.mimeType ?? null,
+        }));
+    },
+
+    missingPayloads() {
+      return [...exchanges.values()]
+        .filter((exchange) => exchange.requestPayload === null && exchange.method !== "GET" && exchange.method !== "HEAD")
+        .map((exchange) => ({ requestId: exchange.requestId }));
+    },
+
+    setResponseBody(requestId, body) {
+      const exchange = exchanges.get(requestId);
+      if (!exchange) {
+        return;
+      }
+      if (!body.text) {
+        exchange.responseBody = null;
+        exchange.bodyTruncated = body.truncated;
+        exchange.bodyOmittedReason = body.omittedReason;
+        return;
+      }
+      const mime = (exchange.response ?? exchange.provisional)?.mimeType ?? null;
+      const redacted = redactPayload(body.text, mime, MAX_RESPONSE_BODY_BYTES);
+      exchange.responseBody = redacted.text;
+      exchange.bodyTruncated = body.truncated || redacted.truncated;
+      exchange.bodyOmittedReason = redacted.omittedReason ?? body.omittedReason;
+    },
+
+    setRequestPayload(requestId, postData) {
+      const exchange = exchanges.get(requestId);
+      if (!exchange) {
+        return;
+      }
+      const payload = payloadOf(postData, exchange.requestHeaders);
+      exchange.requestPayload = payload.text;
+      exchange.requestPayloadTruncated = payload.truncated;
+      exchange.requestBodyOmittedReason = payload.omittedReason;
+      exchange.requestSize = requestSizeOf(exchange.requestHeaders, payload.text);
+    },
   };
 }
 
@@ -297,6 +407,10 @@ function finalize(exchange: Exchange): CapturedExchange {
     resourceType: exchange.resourceType,
     requestHeaders: redactHeaders(exchange.requestHeaders),
     requestPayload: exchange.requestPayload,
+    requestPayloadTruncated: exchange.requestPayloadTruncated,
+    requestBodyOmittedReason: exchange.requestBodyOmittedReason,
+    requestSize: exchange.requestSize,
+    ...queryParamsOf(exchange.url),
     timestamp: exchange.timestamp,
     ...(exchange.initiator ? { initiator: exchange.initiator } : {}),
     failureReason,
@@ -305,9 +419,14 @@ function finalize(exchange: Exchange): CapturedExchange {
       ? {
           response: {
             statusCode: response.statusCode,
+            statusText: response.statusText,
+            remoteAddress: response.remoteAddress,
             responseHeaders: redactHeaders(response.responseHeaders),
             mimeType: response.mimeType,
             bodySize: exchange.encodedLength,
+            responseBody: exchange.responseBody,
+            bodyOmittedReason: exchange.bodyOmittedReason,
+            bodyTruncated: exchange.bodyTruncated,
           },
         }
       : {}),
@@ -336,14 +455,70 @@ function isRedirectStatus(status: number): boolean {
   return status >= 300 && status < 400 && status !== 304;
 }
 
-function initiatorOf(value: unknown): { type: string; url?: string } | null {
+function initiatorOf(value: unknown): InitiatorInfo | null {
   const record = asRecord(value);
   const type = asString(record?.type);
   if (!type) {
     return null;
   }
+  const initiator: InitiatorInfo = { type };
   const url = asString(record?.url);
-  return url ? { type, url: clip(url) } : { type };
+  if (url) {
+    initiator.url = clip(url);
+  }
+  const lineNumber = asIndex(record?.lineNumber);
+  const columnNumber = asIndex(record?.columnNumber);
+  if (lineNumber !== null) {
+    initiator.lineNumber = lineNumber;
+  }
+  if (columnNumber !== null) {
+    initiator.columnNumber = columnNumber;
+  }
+  const requestId = asString(record?.requestId);
+  if (requestId) {
+    initiator.requestId = requestId;
+  }
+  const stack = framesOf(record?.stack, 12);
+  if (stack.length > 0) {
+    initiator.stack = stack;
+  }
+  return initiator;
+}
+
+function framesOf(value: unknown, limit: number): StackFrame[] {
+  const record = asRecord(value);
+  if (!record || limit <= 0) {
+    return [];
+  }
+  const frames: StackFrame[] = [];
+  const callFrames = Array.isArray(record.callFrames) ? record.callFrames : [];
+  for (const frame of callFrames) {
+    if (frames.length >= limit) {
+      break;
+    }
+    const parsed = frameOf(frame);
+    if (parsed) {
+      frames.push(parsed);
+    }
+  }
+  if (frames.length < limit && record.parent) {
+    frames.push(...framesOf(record.parent, limit - frames.length));
+  }
+  return frames;
+}
+
+function frameOf(value: unknown): StackFrame | null {
+  const record = asRecord(value);
+  const url = asString(record?.url);
+  if (!record || !url) {
+    return null;
+  }
+  return {
+    functionName: (asString(record.functionName) ?? "(anonymous)").slice(0, 120),
+    url: clip(url),
+    lineNumber: asIndex(record.lineNumber) ?? 0,
+    columnNumber: asIndex(record.columnNumber) ?? 0,
+  };
 }
 
 function methodOf(value: unknown): string {
@@ -351,14 +526,75 @@ function methodOf(value: unknown): string {
   return method.slice(0, 32);
 }
 
-function payloadOf(value: unknown): string | null {
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_PAYLOAD_BYTES) {
+function payloadOf(
+  value: unknown,
+  headers: Record<string, string>,
+): { text: string | null; truncated: boolean; omittedReason: string | null } {
+  if (typeof value !== "string" || value.length === 0) {
+    return { text: null, truncated: false, omittedReason: null };
+  }
+  return redactPayload(value, headerValue(headers, "content-type"), MAX_REQUEST_BODY_BYTES);
+}
+
+function requestSizeOf(headers: Record<string, string>, payload: string | null): number | null {
+  const declared = headerValue(headers, "content-length");
+  if (declared && /^\d+$/.test(declared)) {
+    const size = Number(declared);
+    if (size <= Number.MAX_SAFE_INTEGER) {
+      return size;
+    }
+  }
+  if (payload === null) {
     return null;
   }
-  if (value.includes("\u0000")) {
+  return new TextEncoder().encode(payload).byteLength;
+}
+
+function queryParamsOf(url: string): { queryParams: QueryParam[] } | Record<string, never> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return {};
+  }
+  const params = [...parsed.searchParams.entries()].slice(0, 50);
+  if (params.length === 0) {
+    return {};
+  }
+  return {
+    queryParams: params.map(([name, value]) => ({
+      name: name.slice(0, 128),
+      value: isSensitiveKey(name) ? "[redacted]" : value.slice(0, 256),
+    })),
+  };
+}
+
+function remoteAddressOf(response: Record<string, unknown>): string | null {
+  const address = asString(response.remoteIPAddress);
+  if (!address) {
     return null;
   }
-  return value;
+  const port = response.remotePort;
+  if (typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65535) {
+    return `${address}:${port}`.slice(0, 128);
+  }
+  return address.slice(0, 128);
+}
+
+function headerValue(headers: Record<string, string>, name: string): string | null {
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === name) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function clipText(value: string | null, max: number): string | null {
+  if (!value) {
+    return null;
+  }
+  return value.slice(0, max);
 }
 
 function mediaType(header: string | null): string | null {
@@ -443,6 +679,13 @@ function asStatus(value: unknown): number | null {
 
 function asMonotonic(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
+
+function asIndex(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1_000_000) {
     return null;
   }
   return value;

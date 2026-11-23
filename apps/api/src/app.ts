@@ -7,9 +7,10 @@ import { AppError } from "./lib/errors.js";
 import { env } from "./lib/env.js";
 import { authRoutes } from "./modules/auth/auth.route.js";
 import { healthRoutes } from "./modules/health/health.route.js";
+import { intelligenceRoutes } from "./modules/scans/intelligence.route.js";
 import { scanInsightRoutes } from "./modules/scans/scan-insights.route.js";
 import { scanRoutes } from "./modules/scans/scans.route.js";
-import { createScanQueue } from "./queues/scan-queue.js";
+import { createReplayQueue, createScanQueue } from "./queues/scan-queue.js";
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -59,16 +60,22 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   const scanQueue = createScanQueue(env.redisUrl);
+  const replayQueue = createReplayQueue(env.redisUrl);
   scanQueue.on("error", (error: Error) => {
     app.log.error({ err: error }, "scan queue error");
+  });
+  replayQueue.on("error", (error: Error) => {
+    app.log.error({ err: error }, "replay queue error");
   });
 
   app.decorate("redis", redis);
   app.decorate("scanQueue", scanQueue);
+  app.decorate("replayQueue", replayQueue);
   app.decorateRequest("authUser", null);
 
   app.addHook("onClose", async () => {
     await scanQueue.close();
+    await replayQueue.close();
     redis.disconnect();
     await prisma.$disconnect();
   });
@@ -76,6 +83,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(healthRoutes, { prefix: "/api/v1" });
   await app.register(authRoutes, { prefix: "/api/v1/auth" });
   await app.register(scanInsightRoutes, { prefix: "/api/v1/scans" });
+  await app.register(intelligenceRoutes, { prefix: "/api/v1/scans" });
   await app.register(scanRoutes, { prefix: "/api/v1/scans" });
 
   return app;

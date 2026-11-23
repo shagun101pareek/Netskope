@@ -1,5 +1,7 @@
 import { Prisma, RequestClass, prisma } from "@netskope/database";
+import { compareEndpoints, isApiObservation, median, percentile, regressionTests, round as roundMs } from "@netskope/shared/inspection";
 import { AppError } from "../../lib/errors.js";
+import { toObservedCall, type InsightRow } from "./observe.js";
 import { getScan } from "./scans.service.js";
 
 const REQUEST_CLASSES = new Set(["DOCUMENT", "STATIC", "API", "OTHER"]);
@@ -24,7 +26,16 @@ export interface RequestSummary {
 export interface RequestDetail extends RequestSummary {
   requestHeaders: unknown;
   requestPayload: string | null;
+  requestPayloadTruncated: boolean;
+  requestBodyOmittedReason: string | null;
+  requestSize: number | null;
+  queryParams: unknown;
   responseHeaders: unknown;
+  statusText: string | null;
+  remoteAddress: string | null;
+  responseBody: string | null;
+  bodyOmittedReason: string | null;
+  bodyTruncated: boolean;
   initiator: unknown;
   redirectChain: unknown;
   timing: {
@@ -34,6 +45,7 @@ export interface RequestDetail extends RequestSummary {
     ttfb: number | null;
     downloadTime: number | null;
     totalDuration: number | null;
+    timingMetadata: unknown;
   } | null;
 }
 
@@ -45,36 +57,24 @@ export interface AnalyticsReport {
   duplicates: { method: string; url: string; count: number }[];
   slow: { method: string; url: string; totalDuration: number; statusCode: number | null }[];
   distribution: { label: string; count: number }[];
+  apiRequestCount: number;
+  successfulApiCount: number;
+  failedApiCount: number;
+  successRate: number | null;
+  medianLatencyMs: number | null;
+  p95LatencyMs: number | null;
+  p99LatencyMs: number | null;
+  slowestEndpoints: { key: string; totalDuration: number; statusCode: number | null }[];
+  frequentEndpoints: { key: string; count: number }[];
+  largestResponses: { method: string; url: string; bodySize: number }[];
+  thirdPartyCount: number;
+  thirdPartyDomains: { host: string; count: number }[];
+  statusDistribution: { label: string; count: number }[];
+  resourceDistribution: { label: string; count: number }[];
+  requestsOverTime: { label: string; count: number }[];
 }
 
-interface StoredRequest {
-  id: string;
-  requestId: string;
-  url: string;
-  method: string;
-  resourceType: string | null;
-  requestClass: RequestClass | null;
-  timestamp: Date;
-  failureReason: string | null;
-  requestHeaders: Prisma.JsonValue;
-  requestPayload: string | null;
-  initiator: Prisma.JsonValue;
-  redirectChain: Prisma.JsonValue;
-  response: {
-    statusCode: number | null;
-    mimeType: string | null;
-    bodySize: number | null;
-    responseHeaders: Prisma.JsonValue;
-  } | null;
-  timing: {
-    dnsTime: number | null;
-    connectTime: number | null;
-    tlsTime: number | null;
-    ttfb: number | null;
-    downloadTime: number | null;
-    totalDuration: number | null;
-  } | null;
-}
+type StoredRequest = InsightRow;
 
 const include = { response: true, timing: true } as const;
 
@@ -88,6 +88,7 @@ export async function listScanRequests(
     requestClass?: string;
     sort?: string;
     limit?: string;
+    initiator?: string;
   },
 ): Promise<{ requests: RequestSummary[] }> {
   await getScan(userId, scanId);
@@ -111,7 +112,10 @@ export async function listScanRequests(
     include,
     orderBy: { timestamp: "asc" },
   });
-  const sorted = sortRows(rows, query.sort).slice(0, parseRequestLimit(query.limit));
+  const initiated = query.initiator
+    ? rows.filter((row) => JSON.stringify(row.initiator ?? "").toLowerCase().includes(query.initiator?.toLowerCase() ?? ""))
+    : rows;
+  const sorted = sortRows(initiated, query.sort).slice(0, parseRequestLimit(query.limit));
 
   return { requests: sorted.map(summarize) };
 }
@@ -129,7 +133,7 @@ export async function getScanRequest(userId: string, scanId: string, requestRowI
 }
 
 export async function scanAnalytics(userId: string, scanId: string): Promise<AnalyticsReport> {
-  await getScan(userId, scanId);
+  const scan = await getScan(userId, scanId);
   const rows = await loadRows(scanId);
   const durations = rows.map((row) => row.timing?.totalDuration).filter((value): value is number => value !== null && value !== undefined);
   const groups = new Map<string, { method: string; url: string; count: number }>();
@@ -162,6 +166,7 @@ export async function scanAnalytics(userId: string, scanId: string): Promise<Ana
     duplicates,
     slow,
     distribution: distribution(rows),
+    ...apiAnalytics(rows, scan.url),
   };
 }
 
@@ -172,6 +177,8 @@ export async function compareScans(userId: string, leftId: string, rightId: stri
   const left = await getScan(userId, leftId);
   const right = await getScan(userId, rightId);
   const [leftRows, rightRows] = await Promise.all([loadRows(leftId), loadRows(rightId)]);
+  const leftCalls = leftRows.map((row) => toObservedCall(row, left.captureBodies));
+  const rightCalls = rightRows.map((row) => toObservedCall(row, right.captureBodies));
   const leftMap = durationMap(leftRows);
   const rightMap = durationMap(rightRows);
   const onlyLeft = [...leftMap.keys()].filter((key) => !rightMap.has(key)).slice(0, 50);
@@ -193,6 +200,8 @@ export async function compareScans(userId: string, leftId: string, rightId: stri
     onlyRight,
     slowerOnRight: deltas.filter((item) => item.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 10),
     fasterOnRight: deltas.filter((item) => item.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 10),
+    endpointChanges: compareEndpoints(leftCalls, rightCalls),
+    regressions: regressionTests(leftCalls, rightCalls),
   };
 }
 
@@ -246,7 +255,16 @@ function detail(row: StoredRequest): RequestDetail {
     ...summarize(row),
     requestHeaders: row.requestHeaders,
     requestPayload: row.requestPayload,
+    requestPayloadTruncated: row.requestPayloadTruncated ?? false,
+    requestBodyOmittedReason: row.requestBodyOmittedReason ?? null,
+    requestSize: row.requestSize ?? null,
+    queryParams: row.queryParams ?? null,
     responseHeaders: row.response?.responseHeaders ?? null,
+    statusText: row.response?.statusText ?? null,
+    remoteAddress: row.response?.remoteAddress ?? null,
+    responseBody: row.response?.responseBody ?? null,
+    bodyOmittedReason: row.response?.bodyOmittedReason ?? null,
+    bodyTruncated: row.response?.bodyTruncated ?? false,
     initiator: row.initiator,
     redirectChain: row.redirectChain,
     timing: row.timing
@@ -257,6 +275,7 @@ function detail(row: StoredRequest): RequestDetail {
           ttfb: row.timing.ttfb,
           downloadTime: row.timing.downloadTime,
           totalDuration: row.timing.totalDuration,
+          timingMetadata: row.timing.timingMetadata ?? null,
         }
       : null,
   };
@@ -389,5 +408,131 @@ function csvCell(value: string | number): string {
 }
 
 function round(value: number): number {
-  return Math.round(value * 1000) / 1000;
+  return roundMs(value);
+}
+
+function apiAnalytics(rows: StoredRequest[], pageUrl: string): Omit<
+  AnalyticsReport,
+  "requestCount" | "failedCount" | "averageLatencyMs" | "duplicateGroups" | "duplicates" | "slow" | "distribution"
+> {
+  let pageHost = "";
+  try {
+    pageHost = new URL(pageUrl).host;
+  } catch {
+    pageHost = "";
+  }
+  const apiRows = rows.filter((row) => isApiObservation(toObservedCall(row, false)));
+  const apiDurations = apiRows.map((row) => row.timing?.totalDuration).filter((value): value is number => value !== null && value !== undefined);
+  const successful = apiRows.filter((row) => !isFailed(row)).length;
+  const endpointLatency = new Map<string, { key: string; totalDuration: number; statusCode: number | null }>();
+  const endpointCounts = new Map<string, number>();
+  for (const row of apiRows) {
+    const key = `${row.method} ${safePath(row.url)}`;
+    endpointCounts.set(key, (endpointCounts.get(key) ?? 0) + 1);
+    const duration = row.timing?.totalDuration;
+    if (duration === null || duration === undefined) {
+      continue;
+    }
+    const existing = endpointLatency.get(key);
+    if (!existing || duration > existing.totalDuration) {
+      endpointLatency.set(key, { key, totalDuration: duration, statusCode: row.response?.statusCode ?? null });
+    }
+  }
+  const domains = new Map<string, number>();
+  let thirdPartyCount = 0;
+  for (const row of rows) {
+    const host = safeHost(row.url);
+    if (!host || host === pageHost || (pageHost && host.endsWith(`.${pageHost}`))) {
+      continue;
+    }
+    thirdPartyCount += 1;
+    domains.set(host, (domains.get(host) ?? 0) + 1);
+  }
+  return {
+    apiRequestCount: apiRows.length,
+    successfulApiCount: successful,
+    failedApiCount: apiRows.length - successful,
+    successRate: apiRows.length === 0 ? null : round((successful / apiRows.length) * 100),
+    medianLatencyMs: median(apiDurations),
+    p95LatencyMs: percentile(apiDurations, 0.95),
+    p99LatencyMs: apiDurations.length >= 20 ? percentile(apiDurations, 0.99) : null,
+    slowestEndpoints: [...endpointLatency.values()].sort((a, b) => b.totalDuration - a.totalDuration).slice(0, 5),
+    frequentEndpoints: [...endpointCounts.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count).slice(0, 5),
+    largestResponses: rows
+      .filter((row) => row.response?.bodySize !== null && row.response?.bodySize !== undefined)
+      .sort((a, b) => (b.response?.bodySize ?? 0) - (a.response?.bodySize ?? 0))
+      .slice(0, 5)
+      .map((row) => ({ method: row.method, url: row.url, bodySize: row.response?.bodySize ?? 0 })),
+    thirdPartyCount,
+    thirdPartyDomains: [...domains.entries()].map(([host, count]) => ({ host, count })).sort((a, b) => b.count - a.count).slice(0, 8),
+    statusDistribution: statusDistribution(rows),
+    resourceDistribution: resourceDistribution(rows),
+    requestsOverTime: overTime(rows),
+  };
+}
+
+function statusDistribution(rows: StoredRequest[]): { label: string; count: number }[] {
+  const buckets = [
+    { label: "2xx", count: 0 },
+    { label: "3xx", count: 0 },
+    { label: "4xx", count: 0 },
+    { label: "5xx", count: 0 },
+    { label: "failed", count: 0 },
+  ];
+  for (const row of rows) {
+    if (row.failureReason && row.response?.statusCode == null) {
+      buckets[4]!.count += 1;
+      continue;
+    }
+    const status = row.response?.statusCode ?? 0;
+    if (status >= 500) buckets[3]!.count += 1;
+    else if (status >= 400) buckets[2]!.count += 1;
+    else if (status >= 300) buckets[1]!.count += 1;
+    else if (status >= 200) buckets[0]!.count += 1;
+    else buckets[4]!.count += 1;
+  }
+  return buckets;
+}
+
+function resourceDistribution(rows: StoredRequest[]): { label: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const label = row.requestClass ?? row.resourceType ?? "unknown";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([label, count]) => ({ label, count }));
+}
+
+function overTime(rows: StoredRequest[]): { label: string; count: number }[] {
+  if (rows.length === 0) {
+    return [];
+  }
+  const start = rows[0]!.timestamp.getTime();
+  const end = rows[rows.length - 1]!.timestamp.getTime();
+  const span = Math.max(end - start, 1);
+  const bucketCount = Math.min(12, rows.length);
+  const width = span / bucketCount;
+  const buckets = Array.from({ length: bucketCount }, (_, index) => ({ label: `${Math.round((index * width) / 1000)}s`, count: 0 }));
+  for (const row of rows) {
+    const index = Math.min(bucketCount - 1, Math.floor((row.timestamp.getTime() - start) / width));
+    buckets[index]!.count += 1;
+  }
+  return buckets;
+}
+
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+function safePath(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.host}${parsed.pathname}`;
+  } catch {
+    return url;
+  }
 }

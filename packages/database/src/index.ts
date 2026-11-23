@@ -27,5 +27,5 @@ if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
 }
 
-export { Prisma, PrismaClient, RequestClass, ScanStatus } from "./generated/prisma/client.js";
+export { Prisma, PrismaClient, ReplayStatus, RequestClass, ScanStatus } from "./generated/prisma/client.js";
 export type { Scan } from "./generated/prisma/client.js";

@@ -7,6 +7,7 @@ import { api, type ScanRecord } from "@/lib/client";
 export function Dashboard() {
   const [scans, setScans] = useState<ScanRecord[]>([]);
   const [url, setUrl] = useState("https://example.com/");
+  const [captureBodies, setCaptureBodies] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -24,7 +25,7 @@ export function Dashboard() {
     setPending(true);
     setError(null);
     try {
-      await api("/api/v1/scans", { method: "POST", body: JSON.stringify({ url }) });
+      await api("/api/v1/scans", { method: "POST", body: JSON.stringify({ url, captureBodies }) });
       setUrl("");
       await load();
     } catch (cause) {
@@ -54,6 +55,10 @@ export function Dashboard() {
           {pending ? "Starting…" : "Start scan"}
         </button>
       </form>
+      <label className="mt-3 flex items-start gap-2 text-sm">
+        <input checked={captureBodies} className="mt-1" type="checkbox" onChange={(event) => setCaptureBodies(event.target.checked)} />
+        <span>Capture redacted response bodies. Authentication and payment paths are never stored. Bodies are limited to 64 KB of text.</span>
+      </label>
       {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
       <ul className="mt-8 divide-y divide-[var(--line)] rounded-lg border border-[var(--line)] bg-[var(--card)]">
         {scans.length === 0 ? <li className="px-4 py-6 text-sm text-[var(--muted)]">No scans yet.</li> : null}

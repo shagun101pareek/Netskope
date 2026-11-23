@@ -45,6 +45,7 @@ export async function scanInsightRoutes(app: FastifyInstance): Promise<void> {
         requestClass?: string;
         sort?: string;
         limit?: string;
+        initiator?: string;
       };
       return listScanRequests(user.id, params.id, query);
     },
