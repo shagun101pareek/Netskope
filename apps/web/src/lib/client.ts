@@ -8,6 +8,7 @@ export interface ScanRecord {
   completedAt: string | null;
   createdAt: string;
   errorMessage: string | null;
+  captureBodies: boolean;
 }
 
 export interface RequestSummary {
@@ -25,11 +26,36 @@ export interface RequestSummary {
   totalDuration: number | null;
 }
 
+export interface StackFrame {
+  functionName: string;
+  url: string;
+  lineNumber: number;
+  columnNumber: number;
+}
+
+export interface InitiatorInfo {
+  type?: string;
+  url?: string;
+  lineNumber?: number;
+  columnNumber?: number;
+  requestId?: string;
+  stack?: StackFrame[];
+}
+
 export interface RequestDetail extends RequestSummary {
   requestHeaders: Record<string, string> | null;
   requestPayload: string | null;
+  requestPayloadTruncated: boolean;
+  requestBodyOmittedReason: string | null;
+  requestSize: number | null;
+  queryParams: { name: string; value: string }[] | null;
   responseHeaders: Record<string, string> | null;
-  initiator: { type?: string; url?: string } | null;
+  statusText: string | null;
+  remoteAddress: string | null;
+  responseBody: string | null;
+  bodyOmittedReason: string | null;
+  bodyTruncated: boolean;
+  initiator: InitiatorInfo | null;
   redirectChain: { url: string; statusCode: number | null }[] | null;
   timing: {
     dnsTime: number | null;
@@ -38,7 +64,84 @@ export interface RequestDetail extends RequestSummary {
     ttfb: number | null;
     downloadTime: number | null;
     totalDuration: number | null;
+    timingMetadata: Record<string, number> | null;
   } | null;
+}
+
+export interface EndpointSummary {
+  key: string;
+  method: string;
+  host: string;
+  path: string;
+  calls: number;
+  successCount: number;
+  failureCount: number;
+  averageLatencyMs: number | null;
+  p95LatencyMs: number | null;
+  averageResponseBytes: number | null;
+  latestStatus: number | null;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+export interface InvocationSummary {
+  id: string;
+  url: string;
+  method: string;
+  timestamp: string;
+  statusCode: number | null;
+  totalDuration: number | null;
+  bodySize: number | null;
+  queryParams: { name: string; value: string }[] | null;
+  requestPreview: string | null;
+  responsePreview: string | null;
+  failureReason: string | null;
+}
+
+export interface InferredSchema {
+  sampleCount: number;
+  node: unknown;
+  jsonSchema: Record<string, unknown> | null;
+  note: string;
+}
+
+export interface GeneratedTest {
+  key: string;
+  name: string;
+  description: string;
+  endpoint: string;
+  method: string;
+  category: string;
+  assertion: { kind: string; expected: string | number; path?: string };
+  expected: string;
+  actual: string;
+  status: "passed" | "failed" | "skipped" | "error";
+  failureReason: string | null;
+  observedBehavior: true;
+}
+
+export interface EndpointChange {
+  key: string;
+  method: string;
+  path: string;
+  change: "added" | "removed" | "changed";
+  notes: string[];
+  left: { calls: number; status: number | null; latencyMs: number | null; fields: string[] } | null;
+  right: { calls: number; status: number | null; latencyMs: number | null; fields: string[] } | null;
+}
+
+export interface DependencyNode {
+  id: string;
+  label: string;
+  statusCode: number | null;
+  totalDuration: number | null;
+  independent: boolean;
+}
+
+export interface DependencyEdge {
+  from: string;
+  to: string;
+  kind: "initiator" | "script";
 }
 
 export interface AnalyticsReport {
@@ -49,6 +152,21 @@ export interface AnalyticsReport {
   duplicates: { method: string; url: string; count: number }[];
   slow: { method: string; url: string; totalDuration: number; statusCode: number | null }[];
   distribution: { label: string; count: number }[];
+  apiRequestCount: number;
+  successfulApiCount: number;
+  failedApiCount: number;
+  successRate: number | null;
+  medianLatencyMs: number | null;
+  p95LatencyMs: number | null;
+  p99LatencyMs: number | null;
+  slowestEndpoints: { key: string; totalDuration: number; statusCode: number | null }[];
+  frequentEndpoints: { key: string; count: number }[];
+  largestResponses: { method: string; url: string; bodySize: number }[];
+  thirdPartyCount: number;
+  thirdPartyDomains: { host: string; count: number }[];
+  statusDistribution: { label: string; count: number }[];
+  resourceDistribution: { label: string; count: number }[];
+  requestsOverTime: { label: string; count: number }[];
 }
 
 export function readToken(): string | null {

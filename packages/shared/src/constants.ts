@@ -12,3 +12,6 @@ export const WORKER_HEARTBEAT_INTERVAL_MS = 5_000;
 
 /** BullMQ queue that carries a scan from the API to the browser worker. */
 export const SCAN_QUEUE_NAME = "scans";
+
+/** BullMQ queue for explicit request replays. The API enqueues; the worker sends. */
+export const REPLAY_QUEUE_NAME = "replays";

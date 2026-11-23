@@ -48,7 +48,9 @@ Requires authentication. Returns `{ "scans": [], "nextCursor": null }` for the s
 
 Requires authentication. `200` returns `{ "scan": { ... } }` when the scan belongs to the user. `404` otherwise.
 
-A new scan moves from `PENDING` to `RUNNING` when the worker accepts it. After Chromium loads the page, the status becomes `COMPLETED` and `completedAt` is set. A blocked destination or a browser failure ends as `FAILED` with `errorMessage`. Captured requests, responses, redirect hops, failures, timing phases, and a request class are stored under the browser's protocol request id. A timing phase the browser did not report is null. Response bodies are not returned.
+A new scan moves from `PENDING` to `RUNNING` when the worker accepts it. After Chromium loads the page, the status becomes `COMPLETED` and `completedAt` is set. A blocked destination or a browser failure ends as `FAILED` with `errorMessage`. Captured requests, responses, redirect hops, failures, timing phases, and a request class are stored under the browser's protocol request id. A timing phase the browser did not report is null.
+
+Optional body field: `captureBodies` (boolean, default false). When true, the worker stores redacted text response bodies up to 64 KB, except on authentication and payment paths and for binary content. The scan object includes `captureBodies`.
 
 ## GET /api/v1/scans/:id/requests
 
@@ -107,4 +109,22 @@ Reports process dependencies. No authentication. This route does not accept a UR
 | `redis` | `PING`. |
 | `worker` | Redis key `netskope:worker:heartbeat` contains a JSON object with `service: "worker"` and `status: "ok"`. |
 
-Response bodies are not part of any route.
+## Inspection routes
+
+All of these require authentication and a scan owned by the caller.
+
+`GET /api/v1/scans/:id/endpoints` groups API calls by method, host, and a normalized path. Filters: `method`, `status`, `domain`, `resourceType`, `endpoint`, `failed=1`, `slow=1`.
+
+`GET /api/v1/scans/:id/invocations?key=` returns the captured calls for one endpoint key from the inventory.
+
+`GET /api/v1/scans/:id/schemas` returns inferred request and response JSON Schemas. A single observation does not mark fields required.
+
+`GET /api/v1/scans/:id/tests` and `POST /api/v1/scans/:id/tests/run` evaluate deterministic checks against stored calls. They do not send traffic. `PATCH /api/v1/scans/:id/tests/:testKey` accepts `{ "enabled": false }` or `{ "expected": 1000 }` for a status or latency budget.
+
+`GET /api/v1/scans/:id/dependencies` returns nodes and edges. An edge exists only for a Chrome parent request or a script URL that was itself requested.
+
+`POST /api/v1/scans/:id/requests/:requestRowId/replays` queues a replay on the worker. Body: `method`, `url`, `headers`, `body`, `confirmed: true`, and `confirmMutation: true` for POST, PUT, PATCH, and DELETE. `sendCredentials` must be omitted or false. Cookie and authorization headers are removed. The URL is checked again at execution time, including redirects. `202` returns the replay. `GET /api/v1/scans/:id/replays/:replayId` returns its result.
+
+`GET /api/v1/scans/compare` still returns URL presence and duration deltas, and also `endpointChanges` and `regressions`.
+
+Request detail includes query parameters, redacted bodies when they were stored, an omission reason when they were not, status text, remote address, and the initiator stack when Chrome provided one.

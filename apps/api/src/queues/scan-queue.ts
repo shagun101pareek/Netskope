@@ -1,9 +1,23 @@
 import { createRequire } from "node:module";
-import { SCAN_QUEUE_NAME, type ScanJobData } from "@netskope/shared";
+import { REPLAY_QUEUE_NAME, SCAN_QUEUE_NAME, type ReplayJobData, type ScanJobData } from "@netskope/shared";
 import type { Queue } from "bullmq";
 
 // Node's ESM loader does not see Queue on BullMQ's CommonJS re-export.
 const { Queue: BullQueue } = createRequire(import.meta.url)("bullmq") as typeof import("bullmq");
+
+export function createReplayQueue(redisUrl: string): Queue<ReplayJobData> {
+  return new BullQueue<ReplayJobData>(REPLAY_QUEUE_NAME, {
+    connection: {
+      url: redisUrl,
+      maxRetriesPerRequest: null,
+    },
+    defaultJobOptions: {
+      attempts: 1,
+      removeOnComplete: 1_000,
+      removeOnFail: 1_000,
+    },
+  });
+}
 
 export function createScanQueue(redisUrl: string): Queue<ScanJobData> {
   return new BullQueue<ScanJobData>(SCAN_QUEUE_NAME, {

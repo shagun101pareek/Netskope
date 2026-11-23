@@ -3,9 +3,9 @@
 // Timing columns are nullable on purpose. A missing browser timing is NULL,
 // never zero. Zero would look like a measurement.
 //
-// Response bodies are not stored in these rows. NetworkResponse keeps
-// body size and an optional reference. The worker will enforce size and
-// retention limits when capture is implemented.
+// Response bodies are opt-in and size-capped. NetworkResponse stores redacted
+// text, or a reason the body was omitted. Authentication and payment paths
+// are never stored. Deleting a scan cascades to requests, bodies, replays, and tests.
 
 generator client {
   provider = "prisma-client"
@@ -17,6 +17,13 @@ datasource db {
 }
 
 enum ScanStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum ReplayStatus {
   PENDING
   RUNNING
   COMPLETED
@@ -36,8 +43,10 @@ model User {
   passwordHash String   @map("password_hash")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  scans         Scan[]
-  refreshTokens RefreshToken[]
+  scans          Scan[]
+  refreshTokens  RefreshToken[]
+  replays        RequestReplay[]
+  testOverrides  TestOverride[]
 
   @@map("users")
 }
@@ -70,11 +79,15 @@ model Scan {
   createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   /// Set only when status is FAILED. Successful scans leave this null.
   errorMessage String?    @map("error_message") @db.Text
+  /// Opt-in. Authentication and payment responses are still never stored.
+  captureBodies Boolean   @default(false) @map("capture_bodies")
   /// Migration `auth_refresh_tokens` also creates a partial unique index on
   /// (user_id, url) where status is PENDING or RUNNING. Prisma cannot model it.
 
-  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  requests NetworkRequest[]
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requests      NetworkRequest[]
+  replays       RequestReplay[]
+  testOverrides TestOverride[]
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([status])
@@ -100,10 +113,17 @@ model NetworkRequest {
   failureReason  String?  @map("failure_reason") @db.Text
   /// Intermediate redirect hops that share this CDP request id, oldest first.
   redirectChain  Json?    @map("redirect_chain")
+  /// Parsed query string. Sensitive names are redacted before write.
+  queryParams    Json?    @map("query_params")
+  /// Byte size of the request body when one was observed. Null when unknown.
+  requestSize    Int?     @map("request_size")
+  requestPayloadTruncated Boolean @default(false) @map("request_payload_truncated")
+  requestBodyOmittedReason String? @map("request_body_omitted_reason") @db.Text
 
   scan     Scan              @relation(fields: [scanId], references: [id], onDelete: Cascade)
   response NetworkResponse?
   timing   RequestTiming?
+  replays  RequestReplay[]
 
   @@unique([scanId, requestId])
   @@index([scanId, timestamp])
@@ -122,8 +142,14 @@ model NetworkResponse {
   mimeType                 String? @map("mime_type")
   /// Encoded body size in bytes, when the browser reported one.
   bodySize                 Int?    @map("body_size")
-  /// Pointer to an external body, not the body itself.
+  /// Pointer to an external body, not the body itself. Inline text lives on responseBody.
   responsePayloadReference String? @map("response_payload_reference")
+  statusText               String? @map("status_text")
+  remoteAddress            String? @map("remote_address")
+  /// Redacted text body. Null when capture was off, the body was binary, or the path was sensitive.
+  responseBody             String? @map("response_body") @db.Text
+  bodyOmittedReason        String? @map("body_omitted_reason") @db.Text
+  bodyTruncated            Boolean @default(false) @map("body_truncated")
 
   request NetworkRequest @relation(fields: [networkRequestId], references: [id], onDelete: Cascade)
 
@@ -146,4 +172,53 @@ model RequestTiming {
   request NetworkRequest @relation(fields: [networkRequestId], references: [id], onDelete: Cascade)
 
   @@map("request_timings")
+}
+
+/// A user-confirmed replay. The worker sends it. The API never opens the socket.
+model RequestReplay {
+  id                String       @id @default(uuid()) @db.Uuid
+  userId            String       @map("user_id") @db.Uuid
+  scanId            String       @map("scan_id") @db.Uuid
+  networkRequestId  String       @map("network_request_id") @db.Uuid
+  method            String
+  url               String       @db.Text
+  headers           Json
+  body              String?      @db.Text
+  confirmMutation   Boolean      @default(false) @map("confirm_mutation")
+  sendCredentials   Boolean      @default(false) @map("send_credentials")
+  status            ReplayStatus @default(PENDING)
+  originalStatus    Int?         @map("original_status")
+  replayStatus      Int?         @map("replay_status")
+  originalDuration  Float?       @map("original_duration")
+  replayDuration    Float?       @map("replay_duration")
+  responseExcerpt   String?      @map("response_excerpt") @db.Text
+  errorMessage      String?      @map("error_message") @db.Text
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt       DateTime?    @map("completed_at") @db.Timestamptz(6)
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scan    Scan           @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  request NetworkRequest @relation(fields: [networkRequestId], references: [id], onDelete: Cascade)
+
+  @@index([scanId, createdAt(sort: Desc)])
+  @@index([userId])
+  @@map("request_replays")
+}
+
+/// Per-scan edits to a generated test. The test key is a hash of category, endpoint, and assertion.
+model TestOverride {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  scanId     String   @map("scan_id") @db.Uuid
+  testKey    String   @map("test_key")
+  enabled    Boolean  @default(true)
+  assertion  Json?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scan Scan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+
+  @@unique([scanId, testKey])
+  @@map("test_overrides")
 }

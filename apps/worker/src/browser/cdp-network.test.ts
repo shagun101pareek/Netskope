@@ -152,6 +152,47 @@ describe("CDP network correlation", () => {
     expect(record?.response).toBeUndefined();
   });
 
+  it("redacts a JSON password and keeps the stack trace Chrome provided", () => {
+    const collector = createNetworkCollector({ now });
+    collector.requestWillBeSent({
+      ...request("11.1", "https://example.com/api/login?token=abc", 1_700_000_000, "Fetch"),
+      request: {
+        url: "https://example.com/api/login?token=abc",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        postData: JSON.stringify({ password: "hunter2", name: "Ada" }),
+      },
+      initiator: {
+        type: "script",
+        stack: { callFrames: [{ functionName: "submit", url: "https://example.com/login.js", lineNumber: 9, columnNumber: 4 }] },
+      },
+    });
+    collector.responseReceived({
+      ...response("11.1", 200, "application/json"),
+      response: {
+        url: "https://example.com/api/login?token=abc",
+        status: 200,
+        statusText: "OK",
+        mimeType: "application/json",
+        remoteIPAddress: "93.184.216.34",
+        remotePort: 443,
+        headers: {},
+      },
+    });
+    collector.setResponseBody("11.1", { text: JSON.stringify({ accessToken: "secret", ok: true }), truncated: false, omittedReason: null });
+
+    const [record] = collector.records();
+    expect(record?.requestPayload).toContain("[redacted]");
+    expect(record?.requestPayload).toContain("Ada");
+    expect(record?.requestPayload).not.toContain("hunter2");
+    expect(record?.queryParams).toEqual([{ name: "token", value: "[redacted]" }]);
+    expect(record?.initiator?.stack?.[0]).toMatchObject({ functionName: "submit", url: "https://example.com/login.js", lineNumber: 9 });
+    expect(record?.response?.statusText).toBe("OK");
+    expect(record?.response?.remoteAddress).toBe("93.184.216.34:443");
+    expect(record?.response?.responseBody).toContain("[redacted]");
+    expect(record?.response?.responseBody).not.toContain("secret");
+  });
+
   it("drops requests past the scan cap without losing earlier ones", () => {
     const collector = createNetworkCollector({ maxRequests: 1, now });
     collector.requestWillBeSent(request("1.1", "https://example.com/a", 1_700_000_000));

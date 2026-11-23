@@ -126,5 +126,9 @@ function timingMetadata(timing: Record<string, unknown> | null): Record<string, 
       metadata[key] = value;
     }
   }
+  const sendTime = span(timing, "sendStart", "sendEnd");
+  if (sendTime !== null) {
+    metadata.sendTime = Math.round(sendTime * 1000) / 1000;
+  }
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }

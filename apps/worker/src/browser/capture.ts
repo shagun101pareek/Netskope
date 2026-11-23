@@ -1,6 +1,14 @@
 import { RequestClass, ScanStatus, prisma, type Prisma } from "@netskope/database";
+import {
+  MAX_BODY_FETCHES,
+  MAX_RESPONSE_BODY_BYTES,
+  prepareResponseText,
+  redactPayload,
+  responseBodyDecision,
+} from "@netskope/shared/inspection";
 import { UrlPolicyError, assertSafeScanUrl } from "@netskope/shared/url-policy";
 import type { Logger } from "pino";
+import type { CDPSession } from "playwright";
 import { classifyExchange } from "./classify.js";
 import { createNetworkCollector, type CapturedExchange } from "./cdp-network.js";
 import { PermanentScanError } from "./errors.js";
@@ -106,6 +114,7 @@ export async function captureScan(scanId: string, logger: Logger): Promise<numbe
     }
 
     await delay(SETTLE_MS);
+    await attachCapturedBodies(session, collector, scan.captureBodies);
 
     const records = collector.records();
     if (records.length === 0) {
@@ -150,6 +159,10 @@ async function persistCapture(scanId: string, records: CapturedExchange[]): Prom
           })],
           requestHeaders: record.requestHeaders,
           requestPayload: record.requestPayload,
+          requestPayloadTruncated: record.requestPayloadTruncated,
+          requestBodyOmittedReason: record.requestBodyOmittedReason,
+          requestSize: record.requestSize,
+          queryParams: record.queryParams as Prisma.InputJsonValue | undefined,
           initiator: record.initiator as Prisma.InputJsonValue | undefined,
           timestamp: record.timestamp,
           failureReason: record.failureReason,
@@ -158,9 +171,14 @@ async function persistCapture(scanId: string, records: CapturedExchange[]): Prom
             ? {
                 create: {
                   statusCode: record.response.statusCode,
+                  statusText: record.response.statusText,
+                  remoteAddress: record.response.remoteAddress,
                   responseHeaders: record.response.responseHeaders,
                   mimeType: record.response.mimeType,
                   bodySize: record.response.bodySize,
+                  responseBody: record.response.responseBody,
+                  bodyOmittedReason: record.response.bodyOmittedReason,
+                  bodyTruncated: record.response.bodyTruncated,
                 },
               }
             : undefined,
@@ -194,6 +212,66 @@ async function persistCapture(scanId: string, records: CapturedExchange[]): Prom
       throw new Error(`Scan ${scanId} was not running when capture finished`);
     }
   });
+}
+
+async function attachCapturedBodies(
+  session: CDPSession,
+  collector: ReturnType<typeof createNetworkCollector>,
+  captureEnabled: boolean,
+): Promise<void> {
+  const targets = collector.bodyTargets();
+  for (const target of targets.slice(MAX_BODY_FETCHES)) {
+    collector.setResponseBody(target.requestId, {
+      text: null,
+      truncated: false,
+      omittedReason: "Body capture limit reached for this scan.",
+    });
+  }
+
+  for (const target of targets.slice(0, MAX_BODY_FETCHES)) {
+    const decision = responseBodyDecision({
+      captureEnabled,
+      url: target.url,
+      mimeType: target.mimeType,
+    });
+    if (!decision.store) {
+      collector.setResponseBody(target.requestId, { text: null, truncated: false, omittedReason: decision.reason });
+      continue;
+    }
+    try {
+      const result = await session.send("Network.getResponseBody", { requestId: target.requestId });
+      const prepared = prepareResponseText(result.body, result.base64Encoded);
+      if (!prepared.text) {
+        collector.setResponseBody(target.requestId, {
+          text: null,
+          truncated: false,
+          omittedReason: prepared.omittedReason,
+        });
+        continue;
+      }
+      const redacted = redactPayload(prepared.text, target.mimeType, MAX_RESPONSE_BODY_BYTES);
+      collector.setResponseBody(target.requestId, {
+        text: redacted.text,
+        truncated: prepared.truncated || redacted.truncated,
+        omittedReason: redacted.omittedReason,
+      });
+    } catch {
+      collector.setResponseBody(target.requestId, {
+        text: null,
+        truncated: false,
+        omittedReason: "The browser did not provide a response body.",
+      });
+    }
+  }
+
+  for (const missing of collector.missingPayloads().slice(0, 40)) {
+    try {
+      const result = await session.send("Network.getRequestPostData", { requestId: missing.requestId });
+      collector.setRequestPayload(missing.requestId, result.postData);
+    } catch {
+      // Chrome does not keep a body for every request.
+    }
+  }
 }
 
 function delay(milliseconds: number): Promise<void> {

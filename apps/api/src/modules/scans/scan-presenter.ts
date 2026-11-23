@@ -8,11 +8,12 @@ export interface ScanResponse {
   completedAt: string | null;
   createdAt: string;
   errorMessage: string | null;
+  captureBodies: boolean;
 }
 
 export function presentScan(scan: Pick<
   Scan,
-  "id" | "url" | "status" | "startedAt" | "completedAt" | "createdAt" | "errorMessage"
+  "id" | "url" | "status" | "startedAt" | "completedAt" | "createdAt" | "errorMessage" | "captureBodies"
 >): ScanResponse {
   return {
     id: scan.id,
@@ -22,5 +23,6 @@ export function presentScan(scan: Pick<
     completedAt: scan.completedAt?.toISOString() ?? null,
     createdAt: scan.createdAt.toISOString(),
     errorMessage: scan.errorMessage,
+    captureBodies: scan.captureBodies,
   };
 }

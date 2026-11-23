@@ -44,7 +44,7 @@ Users own scans. Deleting a user cascades to scans, requests, responses, and tim
 
 A network request is correlated by `(scan_id, request_id)`, where `request_id` is the Chrome DevTools Protocol id. Events for the same id are one row. Redirect hops that reuse that id are stored on `redirect_chain`.
 
-Timing columns are milliseconds. A phase Chrome did not record stays `NULL`, including a connection that was reused. A measured zero stays zero. Response bodies are not columns. `response_payload_reference` stays null.
+Timing columns are milliseconds. A phase Chrome did not record stays `NULL`, including a connection that was reused. A measured zero stays zero. Response bodies are opt-in. When capture is enabled, redacted text under 64 KB is stored on `network_responses.response_body`. Authentication and payment paths, binary content, and bodies over the limit are not stored; `body_omitted_reason` says why. `response_payload_reference` remains available for a future external pointer.
 
 `network_requests.request_class` is `DOCUMENT`, `STATIC`, `API`, or `OTHER`. A document stays a document even when the response is JSON. Static covers stylesheet, image, media, font, script, text track, and manifest. API covers fetch, XHR, event source, websocket, preflight, ping, a JSON or XML content type, or a path under `/api/`, `/graphql`, or `/vN/`. Anything else is `OTHER`. Rows captured before classification stay null.
 
@@ -70,4 +70,4 @@ Scan creation is limited to 30 requests per user in 10 minutes. If Redis cannot 
 
 ## Explicitly not built
 
-Response bodies are not stored. The product does not crawl past the first page, generate API documentation, or build a dependency graph. The API does not fetch the submitted page itself.
+The product does not crawl past the first page. Generated tests describe captured behavior; they do not call the API again and they are not a business specification. Replays never forward captured credentials. The API does not fetch the submitted page itself. See `docs/NETSKOPE_IMPLEMENTATION_PLAN.md` for the inspection, explorer, schema, comparison, and replay behavior that is implemented.

@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./load-env": "./src/load-env.ts",
-    "./url-policy": "./src/url-policy.ts"
+    "./url-policy": "./src/url-policy.ts",
+    "./inspection": "./src/inspection/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

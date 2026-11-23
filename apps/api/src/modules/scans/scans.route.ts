@@ -7,7 +7,7 @@ import { createScan, getScan, listScans } from "./scans.service.js";
 
 const scanSchema = {
   type: "object",
-  required: ["id", "url", "status", "startedAt", "completedAt", "createdAt", "errorMessage"],
+  required: ["id", "url", "status", "startedAt", "completedAt", "createdAt", "errorMessage", "captureBodies"],
   additionalProperties: false,
   properties: {
     id: { type: "string" },
@@ -17,6 +17,7 @@ const scanSchema = {
     completedAt: { type: ["string", "null"] },
     createdAt: { type: "string" },
     errorMessage: { type: ["string", "null"] },
+    captureBodies: { type: "boolean" },
   },
 } as const;
 
@@ -34,6 +35,7 @@ export async function scanRoutes(app: FastifyInstance): Promise<void> {
           additionalProperties: false,
           properties: {
             url: { type: "string", minLength: 1, maxLength: 2048 },
+            captureBodies: { type: "boolean" },
           },
         },
         response: {
@@ -65,8 +67,8 @@ export async function scanRoutes(app: FastifyInstance): Promise<void> {
         "Scan creation is temporarily unavailable.",
       );
 
-      const body = request.body as { url: string };
-      const scan = await createScan(user.id, body.url, app.scanQueue);
+      const body = request.body as { url: string; captureBodies?: boolean };
+      const scan = await createScan(user.id, body.url, app.scanQueue, body.captureBodies === true);
       return reply.code(201).send({ scan });
     },
   );
